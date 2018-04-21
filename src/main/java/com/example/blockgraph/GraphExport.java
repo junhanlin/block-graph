@@ -59,11 +59,11 @@ public class GraphExport
 	    final Driver driver = GraphDatabase.driver(neo4jBolt, AuthTokens.basic(neo4jUser, neo4jPassword));
 	    try (Session session = driver.session())
 	    {
-		StatementResult stmtRes = session.run("MATCH (n:Address) RETURN n");
+		StatementResult stmtRes = session.run("MATCH (m:Address)-[p:PAY]->(n:Address) RETURN p");
 		while (stmtRes.hasNext())
 		{   
 		    Record rec = stmtRes.next();
-		    Map<String, Object> propMap = rec.get("n").asNode().asMap();
+		    Map<String, Object> propMap = rec.get("n").asRelationship().asMap();
 		    writer.print(propMap.get("fromAddress"));
 		    writer.print(","+propMap.get("toAddress"));
 		    writer.print(","+propMap.get("amount"));
