@@ -278,12 +278,12 @@ public class BlockWritter
 						}
 						String queryMergeM = " MERGE (m:Address" + (inputWallet.getCategory() == null ? "" : ":" + inputWallet.getCategory() + " ")
 							+ " {address: '" + inputAddr + "'}) ";
-						String queryUpdateM = "\n ON CREATE SET m += { balnace:" + inputWallet.getBalance()
+						String queryUpdateM = "\n ON CREATE SET m += { balance:" + inputWallet.getBalance()
 							+ (inputWallet.getGroup() == null ? "" : " ,groupName:'" + inputWallet.getGroup() + "' ") + "}";
 
 						String queryMergeN = "\nMERGE (n:Address" + (outputWallet.getCategory() == null ? "" : ":" + outputWallet.getCategory() + " ")
 							+ " {address: '" + outputAddr + "'}) ";
-						String queryUpdateN = "\n ON CREATE SET n += { balnace:" + outputWallet.getBalance()
+						String queryUpdateN = "\n ON CREATE SET n += { balance:" + outputWallet.getBalance()
 							+ (outputWallet.getGroup() == null ? "" : " ,groupName:'" + outputWallet.getGroup() + "' ") + "}";
 
 						String queryPay = "\nMERGE (m)-[:PAY {amount:'" + weightedOutputValue.toPlainString() + "', weight: '"

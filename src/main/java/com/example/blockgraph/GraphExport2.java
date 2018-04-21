@@ -72,7 +72,7 @@ public class GraphExport2
 		    writer.print(propMap.get("address"));
 		    writer.print("," + propMap.get("groupName"));
 		    writer.print("," + category);
-		    writer.print("," + propMap.get("balnace"));
+		    writer.print("," + propMap.get("balance"));
 		    writer.println();
 
 		}
