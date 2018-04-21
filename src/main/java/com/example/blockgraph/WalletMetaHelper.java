@@ -39,7 +39,7 @@ public class WalletMetaHelper
 	WalletMeta retVal = new WalletMeta();
 	retVal.setAddress(address);
 	Document doc = Jsoup.connect("https://www.walletexplorer.com/address/" + address).validateTLSCertificates(false).get();
-
+	System.out.println("https://www.walletexplorer.com/address/"+address);
 	String group = doc.select("#main > h2 > div > a").get(0).text().trim();
 	retVal.setGroup(group);
 	
