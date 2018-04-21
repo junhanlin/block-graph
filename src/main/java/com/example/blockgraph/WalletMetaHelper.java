@@ -42,6 +42,11 @@ public class WalletMetaHelper
 
 	String group = doc.select("#main > h2 > div > a").get(0).text().trim();
 	retVal.setGroup(group);
+	
+	if(group == null)
+	{
+	    System.out.println();
+	}
 
 	if (cateMap == null)
 	{
