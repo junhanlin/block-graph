@@ -1,0 +1,9 @@
+# aws
+aws.account.key=
+aws.account.secret=
+aws.s3.bucket=longhashhack-block
+
+# neo4j
+neo4j.bolt=bolt://172.31.14.93:7687
+neo4j.user=neo4j
+neo4j.password=

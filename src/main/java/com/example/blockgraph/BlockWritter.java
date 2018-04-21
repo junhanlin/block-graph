@@ -1,9 +1,11 @@
 package com.example.blockgraph;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -12,12 +14,27 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 
+import com.amazonaws.SdkClientException;
+import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.model.ListObjectsV2Request;
+import com.amazonaws.services.s3.model.ListObjectsV2Result;
+import com.amazonaws.services.s3.model.ObjectListing;
+import com.amazonaws.services.s3.model.S3ObjectInputStream;
+import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.esotericsoftware.kryo.Kryo;
 import com.esotericsoftware.kryo.KryoException;
 import com.esotericsoftware.kryo.io.Input;
 
 import info.blockchain.api.blockexplorer.Block;
 
+import org.apache.commons.configuration2.Configuration;
+import org.apache.commons.configuration2.FileBasedConfiguration;
+import org.apache.commons.configuration2.PropertiesConfiguration;
+import org.apache.commons.configuration2.builder.FileBasedConfigurationBuilder;
+import org.apache.commons.configuration2.builder.fluent.Parameters;
+import org.apache.commons.configuration2.ex.ConfigurationException;
+import org.apache.commons.io.IOUtils;
 import org.neo4j.driver.v1.AuthTokens;
 import org.neo4j.driver.v1.Driver;
 import org.neo4j.driver.v1.GraphDatabase;
@@ -31,189 +48,222 @@ import org.objenesis.strategy.StdInstantiatorStrategy;
 public class BlockWritter
 {
 
-    public static void main(String[] args)
+    public static void main(String[] args) throws ConfigurationException
     {
-	final Driver driver = GraphDatabase.driver("bolt://srv.yamkr.com:7687", AuthTokens.basic("neo4j", "1qaz2wsx"));
+	Parameters parameters = new Parameters();
+	File propertiesFile = new File(args[0]);
+
+	FileBasedConfigurationBuilder<FileBasedConfiguration> builder = new FileBasedConfigurationBuilder<FileBasedConfiguration>(PropertiesConfiguration.class)
+		.configure(parameters.fileBased().setFile(propertiesFile));
+	Configuration config = builder.getConfiguration();
+
+	String awsAccountKey = (String) config.getProperty("aws.account.key");
+	String awsAccountSecret = (String) config.getProperty("aws.account.secret");
+	String bucketName = (String) config.getProperty("aws.s3.bucket");
+
+	AmazonS3Client s3Client = new AmazonS3Client(new BasicAWSCredentials(awsAccountKey, awsAccountSecret));
+
+	String neo4jBolt = (String) config.getProperty("neo4j.bolt");
+	String neo4jUser = (String) config.getProperty("neo4j.user");
+	String neo4jPassword = (String) config.getProperty("neo4j.password");
+
+	final Driver driver = GraphDatabase.driver(neo4jBolt, AuthTokens.basic(neo4jUser, neo4jPassword));
 	Kryo kryo = new Kryo();
 	kryo.setInstantiatorStrategy(new Kryo.DefaultInstantiatorStrategy(new StdInstantiatorStrategy()));
 
-	File blockDir = new File("/Users/johnlin/Documents/Blocks");
-
 	try (Session session = driver.session())
 	{
-	    File[] blockHeightFiles = blockDir.listFiles();
-	    for (File blockHeightFile : blockHeightFiles)
+	    final ListObjectsV2Request req = new ListObjectsV2Request().withBucketName(bucketName).withMaxKeys(1000);
+	    ListObjectsV2Result result;
+	    do
 	    {
-		String fileName = blockHeightFile.getName();
-		if (blockHeightFile.isFile() && !fileName.endsWith(".part") && fileName.startsWith("height-"))
+		result = s3Client.listObjectsV2(req);
+
+		for (S3ObjectSummary objectSummary : result.getObjectSummaries())
 		{
-		    long height = Long.parseLong(fileName.substring(fileName.indexOf("-") + 1, fileName.length()));
+		    String fileKey = objectSummary.getKey();
 
-		    if (session.run("MATCH (bh:BlockHeight) WHERE bh.height=" + height + " RETURN bh;").hasNext())
+		    if (fileKey.startsWith("height-"))
 		    {
-			continue;
-		    }
+			long height = Long.parseLong(fileKey.substring(fileKey.indexOf("-") + 1, fileKey.length()));
 
-		    final BlockHeight blockHeightObj;
-		    try (com.esotericsoftware.kryo.io.Input kryoInput = new com.esotericsoftware.kryo.io.Input(new FileInputStream(blockHeightFile)))
-		    {
-			blockHeightObj = kryo.readObject(kryoInput, BlockHeight.class);
-		    }
-		    catch (FileNotFoundException | KryoException e)
-		    {
-			e.printStackTrace();
-			continue;
-		    }
-
-		    session.writeTransaction(new TransactionWork<Void>()
-		    {
-			@Override
-			public Void execute(Transaction tx)
+			if (session.run("MATCH (bh:BlockHeight) WHERE bh.height=" + height + " RETURN bh;").hasNext())
 			{
-			    {
-				Map<String, Object> params = new HashMap<>();
-				params.put("height", height);
-				tx.run("CREATE (bh:BlockHeight) SET bh.height = $height ", params);
-			    }
+			    continue;
+			}
 
-			    for (Block block : blockHeightObj.getBlocks())
+			final BlockHeight blockHeightObj;
+			byte[] fileBytes = null;
+			try (S3ObjectInputStream fileIn = s3Client.getObject(bucketName, fileKey).getObjectContent())
+			{
+			    fileBytes = IOUtils.toByteArray(fileIn);
+
+			}
+			catch (SdkClientException | IOException e1)
+			{
+			    // TODO Auto-generated catch block
+			    continue;
+			}
+			try (com.esotericsoftware.kryo.io.Input kryoInput = new com.esotericsoftware.kryo.io.Input(new ByteArrayInputStream(fileBytes)))
+			{
+			    blockHeightObj = kryo.readObject(kryoInput, BlockHeight.class);
+			}
+			catch (KryoException e)
+			{
+			    e.printStackTrace();
+			    continue;
+			}
+
+			session.writeTransaction(new TransactionWork<Void>()
+			{
+			    @Override
+			    public Void execute(Transaction tx)
 			    {
-				txLoop: for (info.blockchain.api.blockexplorer.Transaction blockTx : block.getTransactions())
 				{
-				    Map<String, BigDecimal> inputMap = new HashMap<>();
-				    for (info.blockchain.api.blockexplorer.Input input : blockTx.getInputs())
+				    Map<String, Object> params = new HashMap<>();
+				    params.put("height", height);
+				    tx.run("CREATE (bh:BlockHeight) SET bh.height = $height ", params);
+				}
+
+				for (Block block : blockHeightObj.getBlocks())
+				{
+				    txLoop: for (info.blockchain.api.blockexplorer.Transaction blockTx : block.getTransactions())
 				    {
-					if (input.getPreviousOutput() == null)
+					Map<String, BigDecimal> inputMap = new HashMap<>();
+					for (info.blockchain.api.blockexplorer.Input input : blockTx.getInputs())
+					{
+					    if (input.getPreviousOutput() == null)
+					    {
+						continue txLoop;
+					    }
+
+					    String addr = input.getPreviousOutput().getAddress();
+					    long value = input.getPreviousOutput().getValue();
+					    if (addr.trim().isEmpty())
+					    {
+						// Unable to decode address
+						// e.g.
+						// 862d8672ffba284095df0228544bdef849ce6fc74b73fc478c01472edc842d04
+						continue;
+					    }
+					    if (!inputMap.containsKey(addr))
+					    {
+						inputMap.put(addr, BigDecimal.ZERO);
+					    }
+					    inputMap.put(addr, inputMap.get(addr).add(BigDecimal.valueOf(value)));
+
+					}
+
+					Map<String, BigDecimal> outputMap = new HashMap<>();
+					for (info.blockchain.api.blockexplorer.Output output : blockTx.getOutputs())
+					{
+					    String addr = output.getAddress();
+					    long value = output.getValue();
+					    if (addr.trim().isEmpty())
+					    {
+						// Unable to decode address
+						continue;
+					    }
+					    if (!outputMap.containsKey(addr))
+					    {
+						outputMap.put(addr, BigDecimal.ZERO);
+					    }
+					    outputMap.put(addr, outputMap.get(addr).add(BigDecimal.valueOf(value)));
+
+					}
+
+					if (inputMap.isEmpty() || outputMap.isEmpty())
 					{
 					    continue txLoop;
 					}
-					
-					String addr = input.getPreviousOutput().getAddress();
-					long value = input.getPreviousOutput().getValue();
-					if(addr.trim().isEmpty())
+
+					BigDecimal totalInput = inputMap.values().stream().reduce(BigDecimal.ZERO, (a, b) -> a.add(b));
+					BigDecimal totalOutput = outputMap.values().stream().reduce(BigDecimal.ZERO, (a, b) -> a.add(b));
+					BigDecimal fee = totalInput.subtract(totalOutput);
+					if (fee.compareTo(BigDecimal.ZERO) > 0)
 					{
-					    // Unable to decode address
-					    // e.g. 862d8672ffba284095df0228544bdef849ce6fc74b73fc478c01472edc842d04
-					    continue;
-					}
-					if (!inputMap.containsKey(addr))
-					{
-					    inputMap.put(addr, BigDecimal.ZERO);
-					}
-					inputMap.put(addr, inputMap.get(addr).add(BigDecimal.valueOf(value)));
-
-				    }
-				    
-				    Map<String, BigDecimal> outputMap = new HashMap<>();
-				    for (info.blockchain.api.blockexplorer.Output output : blockTx.getOutputs())
-				    {
-					String addr = output.getAddress();
-					long value = output.getValue();
-					if(addr.trim().isEmpty())
-					{
-					    //Unable to decode address
-					    continue;
-					}
-					if (!outputMap.containsKey(addr))
-					{
-					    outputMap.put(addr, BigDecimal.ZERO);
-					}
-					outputMap.put(addr, outputMap.get(addr).add(BigDecimal.valueOf(value)));
-
-				    }
-				    
-				    if(inputMap.isEmpty() || outputMap.isEmpty())
-				    {
-					continue txLoop;
-				    }
-
-				    BigDecimal totalInput = inputMap.values().stream().reduce(BigDecimal.ZERO, (a, b) -> a.add(b));
-				    BigDecimal totalOutput = outputMap.values().stream().reduce(BigDecimal.ZERO, (a, b) -> a.add(b));
-				    BigDecimal fee = totalInput.subtract(totalOutput);
-				    if (fee.compareTo(BigDecimal.ZERO) > 0)
-				    {
-					for (String inputAddr : inputMap.keySet())
-					{
-					    BigDecimal amt = inputMap.get(inputAddr);
-					    BigDecimal distributedFee = fee.multiply(amt.divide(totalInput,19,BigDecimal.ROUND_DOWN));
-					    inputMap.put(inputAddr, amt.subtract(distributedFee));
-					}
-				    }
-
-				    
-				    
-
-				    Set<String> intersectedAddresses = new HashSet<>(inputMap.keySet());
-				    intersectedAddresses.retainAll(outputMap.keySet());
-
-				    for (String intersectedAddress : intersectedAddresses)
-				    {
-					// check symbol.....
-
-					BigDecimal leftVal = inputMap.get(intersectedAddress);
-					BigDecimal rightVal = outputMap.get(intersectedAddress);
-
-					if (leftVal.compareTo(rightVal) > 0)
-					{
-					    inputMap.put(intersectedAddress, leftVal.subtract(rightVal));
-					    outputMap.remove(intersectedAddress);
-					}
-					else if (leftVal.compareTo(rightVal) < 0)
-					{
-					    inputMap.remove(intersectedAddress);
-					    outputMap.put(intersectedAddress, rightVal.subtract(leftVal));
-					}
-					else
-					{
-					    inputMap.remove(intersectedAddress);
-					    outputMap.remove(intersectedAddress);
-					}
-
-				    }
-
-				    
-				    Map<String, BigDecimal> ratioMap = new HashMap<>();
-				    for (Entry<String, BigDecimal> outputEntry : outputMap.entrySet())
-				    {
-					if (totalOutput.compareTo(BigDecimal.ZERO) == 0)
-					{
-					    System.out.println("totalOutput is zero!!!");
-					}
-					BigDecimal ratio = outputEntry.getValue().divide(totalOutput,19,BigDecimal.ROUND_DOWN);
-					ratioMap.put(outputEntry.getKey(), ratio);
-				    }
-
-				    for (Entry<String, BigDecimal> inputEntry : inputMap.entrySet())
-				    {
-					String inputAddr = inputEntry.getKey();
-					BigDecimal inputValue = inputEntry.getValue();
-					for (Entry<String, BigDecimal> ratioEntry : ratioMap.entrySet())
-					{
-					   
-					    String outputAddr = ratioEntry.getKey();
-					    if(outputAddr == null || outputAddr.trim().isEmpty())
+					    for (String inputAddr : inputMap.keySet())
 					    {
-						System.out.println();
+						BigDecimal amt = inputMap.get(inputAddr);
+						BigDecimal distributedFee = fee.multiply(amt.divide(totalInput, 19, BigDecimal.ROUND_DOWN));
+						inputMap.put(inputAddr, amt.subtract(distributedFee));
 					    }
-					    BigDecimal weightedOutputValue = inputValue.multiply(ratioEntry.getValue());
-					    String query = "MERGE (m:Address {address: '" + inputAddr + "'}) MERGE (n:Address {address:'" + outputAddr + "'}) MERGE (m)-[:PAY {amount:'"
-						    + weightedOutputValue.toPlainString() + "', weight: '" + ratioEntry.getValue().toPlainString() + "', time:" + blockTx.getTime() + ", txHash:'"+blockTx.getHash()+"', blockHeight: "+block.getHeight()+", blockHash:'"+block.getHash()+"'}]->(n)";
-					    System.out.println(query);
-					    tx.run(query);
+					}
+
+					Set<String> intersectedAddresses = new HashSet<>(inputMap.keySet());
+					intersectedAddresses.retainAll(outputMap.keySet());
+
+					for (String intersectedAddress : intersectedAddresses)
+					{
+					    // check symbol.....
+
+					    BigDecimal leftVal = inputMap.get(intersectedAddress);
+					    BigDecimal rightVal = outputMap.get(intersectedAddress);
+
+					    if (leftVal.compareTo(rightVal) > 0)
+					    {
+						inputMap.put(intersectedAddress, leftVal.subtract(rightVal));
+						outputMap.remove(intersectedAddress);
+					    }
+					    else if (leftVal.compareTo(rightVal) < 0)
+					    {
+						inputMap.remove(intersectedAddress);
+						outputMap.put(intersectedAddress, rightVal.subtract(leftVal));
+					    }
+					    else
+					    {
+						inputMap.remove(intersectedAddress);
+						outputMap.remove(intersectedAddress);
+					    }
 
 					}
+
+					Map<String, BigDecimal> ratioMap = new HashMap<>();
+					for (Entry<String, BigDecimal> outputEntry : outputMap.entrySet())
+					{
+					    if (totalOutput.compareTo(BigDecimal.ZERO) == 0)
+					    {
+						System.out.println("totalOutput is zero!!!");
+					    }
+					    BigDecimal ratio = outputEntry.getValue().divide(totalOutput, 19, BigDecimal.ROUND_DOWN);
+					    ratioMap.put(outputEntry.getKey(), ratio);
+					}
+
+					for (Entry<String, BigDecimal> inputEntry : inputMap.entrySet())
+					{
+					    String inputAddr = inputEntry.getKey();
+					    BigDecimal inputValue = inputEntry.getValue();
+					    for (Entry<String, BigDecimal> ratioEntry : ratioMap.entrySet())
+					    {
+
+						String outputAddr = ratioEntry.getKey();
+						if (outputAddr == null || outputAddr.trim().isEmpty())
+						{
+						    System.out.println();
+						}
+						BigDecimal weightedOutputValue = inputValue.multiply(ratioEntry.getValue());
+						String query = "MERGE (m:Address {address: '" + inputAddr + "'}) MERGE (n:Address {address:'" + outputAddr
+							+ "'}) MERGE (m)-[:PAY {amount:'" + weightedOutputValue.toPlainString() + "', weight: '"
+							+ ratioEntry.getValue().toPlainString() + "', time:" + blockTx.getTime() + ", txHash:'" + blockTx.getHash()
+							+ "', blockHeight: " + block.getHeight() + ", blockHash:'" + block.getHash() + "'}]->(n)";
+						System.out.println(query);
+						tx.run(query);
+
+					    }
+					}
+
 				    }
-
 				}
+
+				return null;
 			    }
+			});
 
-			    return null;
-			}
-		    });
-
+		    }
 		}
-
-	    }
+		System.out.println("Next Continuation Token : " + result.getNextContinuationToken());
+		req.setContinuationToken(result.getNextContinuationToken());
+	    } while (result.isTruncated() == true);
 
 	}
     }
