@@ -3,7 +3,6 @@ package com.example.blockgraph;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.List;
 
@@ -13,26 +12,17 @@ import org.apache.commons.configuration2.PropertiesConfiguration;
 import org.apache.commons.configuration2.builder.FileBasedConfigurationBuilder;
 import org.apache.commons.configuration2.builder.fluent.Parameters;
 import org.apache.commons.configuration2.ex.ConfigurationException;
-import org.apache.commons.io.IOUtils;
-import org.joda.time.DateTime;
-import org.joda.time.DateTimeZone;
 
 import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.services.s3.AmazonS3Client;
-import com.amazonaws.services.s3.model.CannedAccessControlList;
 import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.model.PutObjectResult;
 import com.esotericsoftware.kryo.Kryo;
 
 import info.blockchain.api.APIException;
-import info.blockchain.api.blockexplorer.Address;
 import info.blockchain.api.blockexplorer.Block;
 import info.blockchain.api.blockexplorer.BlockExplorer;
-import info.blockchain.api.blockexplorer.Input;
-import info.blockchain.api.blockexplorer.Output;
-import info.blockchain.api.blockexplorer.SimpleBlock;
-import info.blockchain.api.blockexplorer.Transaction;
 
 public class BlockFetcher
 {
@@ -60,24 +50,31 @@ public class BlockFetcher
 
 	long blockHeight = Long.parseLong(args[1]);
 
-	List<Block> blocks = blockExplorer.getBlocksAtHeight(blockHeight);
-
-	ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
-
-	try (com.esotericsoftware.kryo.io.Output kryoOutput = new com.esotericsoftware.kryo.io.Output(byteOut))
+	while (blockHeight > 0)
 	{
-	    BlockHeight blockHeightObj = new BlockHeight();
-	    blockHeightObj.setBlocks(blocks);
-	    kryo.writeObject(kryoOutput, blockHeightObj);
+	    System.out.println("Fetching block at height " + blockHeight);
+	    List<Block> blocks = blockExplorer.getBlocksAtHeight(blockHeight);
 
-	}
+	    ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
 
-	try (ByteArrayInputStream byteIn = new ByteArrayInputStream(byteOut.toByteArray()))
-	{
-	    PutObjectRequest putObjectRequest = new PutObjectRequest(bucketName, "height-" + blockHeight, byteIn, new ObjectMetadata());
+	    try (com.esotericsoftware.kryo.io.Output kryoOutput = new com.esotericsoftware.kryo.io.Output(byteOut))
+	    {
+		BlockHeight blockHeightObj = new BlockHeight();
+		blockHeightObj.setBlocks(blocks);
+		kryo.writeObject(kryoOutput, blockHeightObj);
 
-	    PutObjectResult putObjectResult = s3Client.putObject(putObjectRequest);
+	    }
 
+	    try (ByteArrayInputStream byteIn = new ByteArrayInputStream(byteOut.toByteArray()))
+	    {
+		PutObjectRequest putObjectRequest = new PutObjectRequest(bucketName, "height-" + blockHeight, byteIn, new ObjectMetadata());
+
+		PutObjectResult putObjectResult = s3Client.putObject(putObjectRequest);
+
+	    }
+	    System.out.println("Done!");
+	    blockHeight--;
+	    Thread.sleep(600);
 	}
 
     }
