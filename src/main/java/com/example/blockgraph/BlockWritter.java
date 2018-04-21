@@ -125,28 +125,25 @@ public class BlockWritter
 			    continue;
 			}
 
-			session.writeTransaction(new TransactionWork<Void>()
+			
+
+			for (Block block : blockHeightObj.getBlocks())
 			{
-			    @Override
-			    public Void execute(Transaction tx)
+
+			    txLoop: for (info.blockchain.api.blockexplorer.Transaction blockTx : block.getTransactions())
 			    {
+				session.writeTransaction(new TransactionWork<Void>()
 				{
-				    Map<String, Object> params = new HashMap<>();
-				    params.put("height", height);
-				    tx.run("CREATE (bh:BlockHeight) SET bh.height = $height ", params);
-				}
-
-				for (Block block : blockHeightObj.getBlocks())
-				{
-
-				    txLoop: for (info.blockchain.api.blockexplorer.Transaction blockTx : block.getTransactions())
+				    @Override
+				    public Void execute(Transaction tx)
 				    {
+
 					Map<String, BigDecimal> inputMap = new HashMap<>();
 					for (info.blockchain.api.blockexplorer.Input input : blockTx.getInputs())
 					{
 					    if (input.getPreviousOutput() == null)
 					    {
-						continue txLoop;
+						return null;
 					    }
 
 					    String addr = input.getPreviousOutput().getAddress();
@@ -186,7 +183,7 @@ public class BlockWritter
 
 					if (inputMap.isEmpty() || outputMap.isEmpty())
 					{
-					    continue txLoop;
+					    return null;
 					}
 
 					BigDecimal totalInput = inputMap.values().stream().reduce(BigDecimal.ZERO, (a, b) -> a.add(b));
@@ -250,10 +247,11 @@ public class BlockWritter
 					    try
 					    {
 						inputWallet = new WalletMetaHelper(config, inputAddr).getMeta();
-						
+
 					    }
 					    catch (IOException | SQLException e)
 					    {
+						e.printStackTrace();
 						continue;
 					    }
 
@@ -268,7 +266,6 @@ public class BlockWritter
 
 						BigDecimal weightedOutputValue = inputValue.multiply(ratioEntry.getValue());
 
-						
 						WalletMeta outputWallet = null;
 						try
 						{
@@ -276,33 +273,41 @@ public class BlockWritter
 						}
 						catch (IOException | SQLException e)
 						{
+						    e.printStackTrace();
 						    continue;
 						}
+						String queryMergeM = " MERGE (m:Address" + (inputWallet.getCategory() == null ? "" : ":" + inputWallet.getCategory() + " ")
+							+ " {address: '" + inputAddr + "'}) ";
+						String queryUpdateM = "\n ON MATCH SET m += { balnace:" + inputWallet.getBalance()
+							+ (inputWallet.getGroup() == null ? "" : " ,groupName:'" + inputWallet.getGroup() + "' ") + "}";
 
-						String query = "MERGE (m:Address" + (inputWallet.getCategory() == null ? "" : ":" + inputWallet.getCategory() + " ")
-							+ " {address: '" + inputAddr + "' "
-							+ (inputWallet.getGroup() == null ? "" : " ,groupName:'" + inputWallet.getGroup() + "' ") + " ,balance: "
-							+ inputWallet.getBalance()
+						String queryMergeN = "\nMERGE (n:Address" + (outputWallet.getCategory() == null ? "" : ":" + outputWallet.getCategory() + " ")
+							+ " {address: '" + outputAddr + "'}) ";
+						String queryUpdateN = "\n ON MATCH SET n += { balnace:" + outputWallet.getBalance()
+							+ (outputWallet.getGroup() == null ? "" : " ,groupName:'" + outputWallet.getGroup() + "' ") + "}";
 
-							+ " }) MERGE (n:Address" + (outputWallet.getCategory() == null ? "" : ":" + outputWallet.getCategory() + " ")
-							+ " {address:'" + outputAddr + "' "
-							+ (outputWallet.getGroup() == null ? "" : " ,groupName:'" + outputWallet.getGroup() + "' ") + " ,balance: "
-							+ outputWallet.getBalance() + " }) MERGE (m)-[:PAY {amount:'" + weightedOutputValue.toPlainString() + "', weight: '"
+						String queryPay = "\nMERGE (m)-[:PAY {amount:'" + weightedOutputValue.toPlainString() + "', weight: '"
 							+ ratioEntry.getValue().toPlainString() + "', time:" + blockTx.getTime() + ", txHash:'" + blockTx.getHash()
 							+ "', blockHeight: " + block.getHeight() + ", blockHash:'" + block.getHash() + "'}]->(n)";
+
+						String query = queryMergeM + queryUpdateM + queryMergeN + queryUpdateN + queryPay;
 						System.out.println(query);
 						tx.run(query);
 
 					    }
 					}
 
+					return null;
 				    }
-
-				}
-
-				return null;
+				});
 			    }
-			});
+			}
+			
+			{
+			    Map<String, Object> params = new HashMap<>();
+			    params.put("height", height);
+			    session.run("CREATE (bh:BlockHeight) SET bh.height = $height ", params);
+			}
 
 		    }
 		}
