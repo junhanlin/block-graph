@@ -6,6 +6,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.Writer;
+import java.util.Map;
 
 import org.apache.commons.configuration2.Configuration;
 import org.apache.commons.configuration2.FileBasedConfiguration;
@@ -45,7 +46,8 @@ public class GraphExport
 		while (stmtRes.hasNext())
 		{
 		    Record rec = stmtRes.next();
-		    writer.println( rec.get("address").asString());
+		    Map<String, Object> propMap = rec.get("n").asNode().asMap();
+		    writer.println(propMap.get("address"));
 
 		}
 	    }
@@ -59,15 +61,16 @@ public class GraphExport
 	    {
 		StatementResult stmtRes = session.run("MATCH (n:Address) RETURN n");
 		while (stmtRes.hasNext())
-		{
+		{   
 		    Record rec = stmtRes.next();
-		    writer.print(rec.get("fromAddress").asString());
-		    writer.print(","+rec.get("toAddress").asString());
-		    writer.print(","+rec.get("amount").asString());
-		    writer.print(","+rec.get("weight").asString());
-		    writer.print(","+rec.get("time").asString());
-		    writer.print(","+rec.get("blockHeight").asString());
-		    writer.print(","+rec.get("txHash").asString());
+		    Map<String, Object> propMap = rec.get("n").asNode().asMap();
+		    writer.print(propMap.get("fromAddress"));
+		    writer.print(","+propMap.get("toAddress"));
+		    writer.print(","+propMap.get("amount"));
+		    writer.print(","+propMap.get("weight"));
+		    writer.print(","+propMap.get("time"));
+		    writer.print(","+propMap.get("blockHeight"));
+		    writer.print(","+propMap.get("txHash"));
 		    writer.println();
 
 		}
