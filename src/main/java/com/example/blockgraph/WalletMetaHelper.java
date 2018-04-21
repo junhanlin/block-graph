@@ -74,7 +74,7 @@ public class WalletMetaHelper
 	
 	String balanceStr = doc.select("#main > table > tbody > tr:nth-child(2) > td:nth-child(3)").get(0).text().trim();
 	BigDecimal balance =new BigDecimal(balanceStr).multiply(Decimal.valueOf("100000000"));
-	retVal.setBalance(balance.intValue());
+	retVal.setBalance(balance.longValue());
 	
 	return retVal;
 
